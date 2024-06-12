@@ -1,2 +1,2 @@
-# odffp
-Orientation Distribution Function Fingerprinting (ODF-FP)
+# ODF-FP
+Orientation Distribution Function Fingerprinting
