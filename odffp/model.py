@@ -319,6 +319,15 @@ class OdffpDictionary(DiffusionDataGenerator):
         self.peaks_per_voxel = np.concatenate((self.peaks_per_voxel, external_odf_dict.peaks_per_voxel))
 
 
+    def get_size(self):
+        if self.peak_dirs is None:
+            dict_size = 0
+        else:
+            dict_size = self.peak_dirs.shape[2]
+
+        return dict_size 
+
+
     def generate(self, dict_size=1000000, max_peaks_num=3, equal_fibers=False,
                  p_iso=[0.0,1.0], p_fib=[0.0,1.0], f_in=[0.0,1.0], 
                  D_iso=[2.0,3.0], D_a=[1.5,2.5], D_e=[1.5,2.5], D_r=[0.5,1.5],
@@ -938,7 +947,9 @@ class OdffpFit(OdfFit):
         self._data[mask] = other_odffp_fit._data[mask]
         self._odf[mask] = other_odffp_fit._odf[mask]
         self._peak_dirs[mask] = other_odffp_fit._peak_dirs[mask]
-        self._dict_idx[mask] = other_odffp_fit._dict_idx[mask]
+        
+        self._dict_idx[mask] = self._dict.get_size() + other_odffp_fit._dict_idx[mask]
+        self._dict.append(other_odffp_fit._dict)
 
 
     def odf(self, sphere=None):
