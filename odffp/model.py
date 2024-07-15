@@ -174,6 +174,19 @@ class DiffusionDataGenerator(object):
             break
 
         return micro_params
+    
+    
+    # Combined generation of fraction volumes and micro parameters to allow their joint posterior distribution 
+    def _random_model_parameters(self, p_iso, p_fib, f_in, D_iso, D_a, D_e, D_r, peaks_per_voxel, 
+                                 equal_fibers, assert_faster_D_a, tortuosity_approximation):
+        
+        fraction_volumes = self._random_fraction_volumes(p_iso, p_fib, peaks_per_voxel)
+        micro_params = self._random_micro_parameters(
+            f_in, D_iso, D_a, D_e, D_r, peaks_per_voxel, 
+            equal_fibers, assert_faster_D_a, tortuosity_approximation
+        )
+        
+        return fraction_volumes, micro_params
 
 
     def _compute_dwi(self, ratio, micro, peak_dirs_idx):
@@ -392,14 +405,11 @@ class OdffpDictionary(DiffusionDataGenerator):
                     self.tessellation.theta[peak_dirs_idx[:self.peaks_per_voxel[j],i]] - np.pi/2
                 ])
 
-                # Draw fraction volumes randomly
-                self.ratio[:self.peaks_per_voxel[j]+1,j] = self._random_fraction_volumes(p_iso, p_fib, self.peaks_per_voxel[j])
-
-                # Draw microstructure parameters randomly
-                self.micro[:,:self.peaks_per_voxel[j]+1,j] = self._random_micro_parameters(
-                    f_in, D_iso, D_a, D_e, D_r, self.peaks_per_voxel[j], 
+                # Draw model parameters randomly
+                self.ratio[:self.peaks_per_voxel[j]+1,j], self.micro[:,:self.peaks_per_voxel[j]+1,j] = self._random_model_parameters(
+                    p_iso, p_fib, f_in, D_iso, D_a, D_e, D_r, self.peaks_per_voxel[j], 
                     equal_fibers, assert_faster_D_a, tortuosity_approximation
-                )
+                ) 
 
             self.odf[:,chunk_idx] = self._compute_odf_trace(
                 odf_recon_model, self.ratio[:,chunk_idx], self.micro[:,:,chunk_idx], peak_dirs_idx
@@ -434,41 +444,65 @@ class OdffpDictionary(DiffusionDataGenerator):
 
 class PosteriorOdffpDictionary(OdffpDictionary):
 
+    # def __init__(self, gtab, odffp_fit, tessellation=dsiSphere8Fold()):
+    #     self._ratio_pdf = {0: {}} 
+    #     self._micro_pdf = {0: {}}
+    #
+    #     for peaks_num in range(1, odffp_fit.get_max_peaks_num()+1):
+    #
+    #         compartment_volumes = odffp_fit.get_compartment_volume(peaks_num)
+    #         try:
+    #             # # Fit KDE model of the compartment volumes
+    #             # self._ratio_pdf[peaks_num] = scipy.stats.gaussian_kde(compartment_volumes)
+    #
+    #             # Fit KDE model of the compartment volumes
+    #             self._ratio_pdf[peaks_num] = scipy.stats.gaussian_kde(compartment_volumes[1:])
+    #
+    #         except:
+    #             # If not succeeded, take mean values
+    #             self._ratio_pdf[peaks_num] = np.mean(compartment_volumes, axis=1)
+    #
+    #         self._micro_pdf[peaks_num] = {}
+    #         for peak_id in range(peaks_num+1):
+    #
+    #             # Diffusivity parameters of the free water compartment aren't estimated
+    #             if peak_id < 1:
+    #                 self._micro_pdf[peaks_num][peak_id] = {}
+    #                 continue
+    #
+    #             micro_parameters = odffp_fit.get_micro_parameters(peaks_num, peak_id)
+    #             try:
+    #                 # Fit KDE model of the microstructure parameters
+    #                 self._micro_pdf[peaks_num][peak_id] = scipy.stats.gaussian_kde(
+    #                     micro_parameters, bw_method='silverman'
+    #                 )
+    #             except:
+    #                 # If not succeeded, take mean values
+    #                 self._micro_pdf[peaks_num][peak_id] = np.mean(micro_parameters, axis=1)
+    #
+    #     OdffpDictionary.__init__(self, gtab, tessellation=tessellation)
+
+
     def __init__(self, gtab, odffp_fit, tessellation=dsiSphere8Fold()):
-        self._ratio_pdf = {0: {}} 
-        self._micro_pdf = {0: {}}
+        self.max_peaks_num = odffp_fit.get_max_peaks_num()
 
-        for peaks_num in range(1, odffp_fit.get_max_peaks_num()+1):
+        # Free water fraction is not modeled, hence [1:]
+        compartment_volumes = odffp_fit.get_compartment_volume()[1:]
 
-            compartment_volumes = odffp_fit.get_compartment_volume(peaks_num)
-            try:
-                # # Fit KDE model of the compartment volumes
-                # self._ratio_pdf[peaks_num] = scipy.stats.gaussian_kde(compartment_volumes)
+        # For simplicity, assume equal_fibers, i.e., all fibers are like the first one (peak_id = 1)
+        micro_parameters = odffp_fit.get_micro_parameters(peak_id = 1)
 
-                # Fit KDE model of the compartment volumes
-                self._ratio_pdf[peaks_num] = scipy.stats.gaussian_kde(compartment_volumes[1:])
+        try:
+            model_parameters = np.vstack((compartment_volumes, micro_parameters))
+            model_parameters[np.isnan(model_parameters)] = 0
 
-            except:
-                # If not succeeded, take mean values
-                self._ratio_pdf[peaks_num] = np.mean(compartment_volumes, axis=1)
-
-            self._micro_pdf[peaks_num] = {}
-            for peak_id in range(peaks_num+1):
-
-                # Diffusivity parameters of the free water compartment aren't estimated
-                if peak_id < 1:
-                    self._micro_pdf[peaks_num][peak_id] = {}
-                    continue
-
-                micro_parameters = odffp_fit.get_micro_parameters(peaks_num, peak_id)
-                try:
-                    # Fit KDE model of the microstructure parameters
-                    self._micro_pdf[peaks_num][peak_id] = scipy.stats.gaussian_kde(
-                        micro_parameters, bw_method='silverman'
-                    )
-                except:
-                    # If not succeeded, take mean values
-                    self._micro_pdf[peaks_num][peak_id] = np.mean(micro_parameters, axis=1)
+            self._model_pdf = scipy.stats.gaussian_kde(model_parameters)
+            
+        except:
+            self._model_pdf = np.hstack((
+                np.nanmean(compartment_volumes, axis=1),
+                np.nanmean(micro_parameters, axis=1)
+            ))
 
         OdffpDictionary.__init__(self, gtab, tessellation=tessellation)
 
@@ -477,13 +511,14 @@ class PosteriorOdffpDictionary(OdffpDictionary):
         return np.maximum(np.minimum(np.squeeze(value), upper_bound), lower_bound)
 
 
-    def _random_fraction_volumes(self, p_iso, p_fib, peaks_per_voxel):
-        try:
-            fiber_fraction_volumes = np.squeeze(self._ratio_pdf[peaks_per_voxel].resample(1))
-            water_fraction_volume = np.maximum(p_iso[0], 1 - np.sum(fiber_fraction_volumes))
-            fraction_volumes = np.hstack((water_fraction_volume, fiber_fraction_volumes))
-        except:
-            fraction_volumes = np.squeeze(self._ratio_pdf[peaks_per_voxel])
+    def _random_fraction_volumes(self, p_iso, p_fib, peaks_per_voxel, params_sample):
+        
+        fiber_fraction_volumes = params_sample[:peaks_per_voxel]
+        water_fraction_volume = np.maximum(p_iso[0], 1 - np.sum(fiber_fraction_volumes))
+        
+        fraction_volumes = np.hstack((
+            water_fraction_volume, fiber_fraction_volumes
+        ))
 
         fraction_volumes[0] = self._crop_value(fraction_volumes[0], p_iso[0], p_iso[1])
 
@@ -493,60 +528,77 @@ class PosteriorOdffpDictionary(OdffpDictionary):
         return fraction_volumes / np.maximum(1e-8, np.sum(fraction_volumes))
 
 
-    def _out_of_range(self, values, valid_range):
-        return np.any(values < valid_range[0]) or np.any(values > valid_range[1])
-
-
     def _random_micro_parameters(self, f_in, D_iso, D_a, D_e, D_r, peaks_per_voxel, 
-                                 equal_fibers, assert_faster_D_a, tortuosity_approximation):
+                                 equal_fibers, assert_faster_D_a, tortuosity_approximation,
+                                 params_sample):
 
         micro_params = np.zeros((self.MICRO_PARAMS_NUM, peaks_per_voxel+1))
 
         # Free water compartment has D_a=0, f_in=0, and D_a=D_e
         micro_params[1:3,0] = np.random.uniform(D_iso[0], D_iso[1])
 
-        # Repeat until the microstructure parameters are valid
+        if peaks_per_voxel < 1:
+            return True, micro_params
+
+        # Equal fibers assumption for simplicity
+        for peak_id in range(1,peaks_per_voxel+1):
+            micro_params[:,peak_id] = params_sample[self.max_peaks_num:]
+
+        if self._out_of_range(micro_params[self.MICRO_DA,1:peaks_per_voxel+1], D_a):
+            return False, micro_params
+
+        if self._out_of_range(micro_params[self.MICRO_DE,1:peaks_per_voxel+1], D_e):
+            return False, micro_params
+
+        if self._out_of_range(micro_params[self.MICRO_DR,1:peaks_per_voxel+1], D_r):
+            return False, micro_params
+
+        if self._out_of_range(micro_params[self.MICRO_FIN,1:peaks_per_voxel+1], f_in):
+            return False, micro_params
+
+        if assert_faster_D_a and np.any(micro_params[self.MICRO_DA,1:] < micro_params[self.MICRO_DE,1:]):
+            return False, micro_params
+
+        if tortuosity_approximation:
+            micro_params[self.MICRO_DR,1:] = (1 - micro_params[self.MICRO_FIN,1:]) * micro_params[self.MICRO_DA,1:]
+            if np.any(micro_params[self.MICRO_DR,1:] < D_r[0]) or np.any(micro_params[self.MICRO_DR,1:] > D_r[1]):
+                return False, micro_params
+
+        return True, micro_params
+
+
+    def _random_model_parameters(self, p_iso, p_fib, f_in, D_iso, D_a, D_e, D_r, peaks_per_voxel, 
+        equal_fibers, assert_faster_D_a, tortuosity_approximation):
+
         while True:
+            
+            try:
+                params_sample = np.squeeze(self._model_pdf.resample(1))
+                
+            except:
+                params_sample = self._model_pdf
 
-            for peak_id in range(1,peaks_per_voxel+1):
+            # Decode fraction volumes                
+            fraction_volumes = self._random_fraction_volumes(
+                p_iso, p_fib, peaks_per_voxel, params_sample
+            )
 
-                if equal_fibers and peak_id > 1:
-                    # Equal fibers means that all fibers have the same diffusivities and f_in
-                    micro_params[:,peak_id] = micro_params[:,1]
-                    continue
+            # Decode microstructure parameters            
+            sample_is_valid, micro_params = self._random_micro_parameters(
+                f_in, D_iso, D_a, D_e, D_r, peaks_per_voxel, 
+                True, assert_faster_D_a, tortuosity_approximation, params_sample
+            )    
+            
+            if sample_is_valid:
+                break
+                
+        return fraction_volumes, micro_params
 
-                try:
-                    micro_params[:,peak_id] = np.squeeze(
-                        self._micro_pdf[peaks_per_voxel][peak_id].resample(1)
-                    )
-                except:
-                    micro_params[:,peak_id] = np.squeeze(
-                        self._micro_pdf[peaks_per_voxel][peak_id]
-                    )
 
-            if self._out_of_range(micro_params[self.MICRO_DA,1:peaks_per_voxel+1], D_a):
-                continue
+    def _out_of_range(self, values, valid_range):
+        return np.any(values < valid_range[0]) or np.any(values > valid_range[1])
 
-            if self._out_of_range(micro_params[self.MICRO_DE,1:peaks_per_voxel+1], D_e):
-                continue
 
-            if self._out_of_range(micro_params[self.MICRO_DR,1:peaks_per_voxel+1], D_r):
-                continue
-
-            if self._out_of_range(micro_params[self.MICRO_FIN,1:peaks_per_voxel+1], f_in):
-                continue
-
-            if assert_faster_D_a and np.any(micro_params[self.MICRO_DA,1:] < micro_params[self.MICRO_DE,1:]):
-                continue
-
-            if tortuosity_approximation:
-                micro_params[self.MICRO_DR,1:] = (1 - micro_params[self.MICRO_FIN,1:]) * micro_params[self.MICRO_DA,1:]
-                if np.any(micro_params[self.MICRO_DR,1:] < D_r[0]) or np.any(micro_params[self.MICRO_DR,1:] > D_r[1]):
-                    continue
-
-            break
-
-        return micro_params
 
 
 class PosteriorOdffpDictionaryFromFib(PosteriorOdffpDictionary):
