@@ -73,33 +73,33 @@ class DiffusionDataGenerator(object):
     MICRO_DE  = 1
     MICRO_DR  = 2
     MICRO_FIN = 3    
-
+    
     MICRO_PARAMS_NUM = len((MICRO_DA, MICRO_DE, MICRO_DR, MICRO_FIN))
-
+    
     max_peaks_num = 0    
-
-
+    
+    
     def __init__(self, gtab, tessellation=dsiSphere8Fold()):
         self.gtab = gtab
         self.tessellation = tessellation
-
+    
 
     def _validate_interval_parameter(self, parm):
         return np.array([np.min(parm), np.max(parm)])
-
-
+    
+    
     def _validate_fraction_volumes(self, p_iso, p_fib):
-
+        
         # Convert constants or mismatched arrays to intervals
         p_iso = self._validate_interval_parameter(p_iso)
         p_fib = self._validate_interval_parameter(p_fib)
-
+        
         # Lower bounds are hard limits, so they must sum up to less than 1
         if p_iso[0] + self.max_peaks_num * p_fib[0] >= 1:
             raise Exception(
                 "Lower boundaries of fraction volumes are too high for max_peaks_num=%d" % self.max_peaks_num
             )
-
+            
         return p_iso, p_fib
 
 
@@ -109,13 +109,13 @@ class DiffusionDataGenerator(object):
         D_a = self._validate_interval_parameter(D_a)
         D_e = self._validate_interval_parameter(D_e)
         D_r = self._validate_interval_parameter(D_r)
-
+        
         return f_in, D_iso, D_a, D_e, D_r 
 
 
     def _random_fraction_volumes(self, p_iso, p_fib, peaks_per_voxel):        
         fraction_volumes = np.zeros(peaks_per_voxel+1)
-
+        
         # Lower bounds are hard limits, so the variability remains between 0 and p_random_max 
         p_random_max = 1 - (p_iso[0] + peaks_per_voxel * p_fib[0])
 
@@ -124,27 +124,27 @@ class DiffusionDataGenerator(object):
             np.random.uniform(0, p_iso[1] - p_iso[0]),
             np.random.uniform(0, p_fib[1] - p_fib[0], size=peaks_per_voxel)
         ))
-
+        
         # Apply soft limits on upper bounds
         p_random /= np.maximum(1e-8, np.sum(p_random))
-
+        
         # Set the fraction volumes of fibers
         fraction_volumes[1:] = p_fib[0] + p_random_max * p_random[1:]
-
+        
         # Set the fraction volume of free water 
         fraction_volumes[0] = 1 - np.sum(fraction_volumes[1:])
-
+       
         return fraction_volumes
-
-
+    
+    
     def _random_micro_parameters(self, f_in, D_iso, D_a, D_e, D_r, peaks_per_voxel, 
                                  equal_fibers, assert_faster_D_a, tortuosity_approximation):
-
+        
         micro_params = np.zeros((self.MICRO_PARAMS_NUM, peaks_per_voxel+1))
-
+        
         # Free water compartment has D_a=0, f_in=0, and D_e=D_iso
         micro_params[self.MICRO_DE,0] = np.random.uniform(D_iso[0], D_iso[1])
-
+        
         # Repeat until the microstructure parameters are valid
         while True:
 
@@ -162,7 +162,7 @@ class DiffusionDataGenerator(object):
                     np.random.uniform(D_r[0], D_r[1], size=peaks_per_voxel), 
                     np.random.uniform(f_in[0], f_in[1], size=peaks_per_voxel)
                 ])
-
+                
             if assert_faster_D_a and np.any(micro_params[self.MICRO_DA,1:] < micro_params[self.MICRO_DE,1:]):
                 continue
 
@@ -170,47 +170,34 @@ class DiffusionDataGenerator(object):
                 micro_params[self.MICRO_DR,1:] = (1 - micro_params[self.MICRO_FIN,1:]) * micro_params[self.MICRO_DA,1:]
                 if np.any(micro_params[self.MICRO_DR,1:] < D_r[0]) or np.any(micro_params[self.MICRO_DR,1:] > D_r[1]):
                     continue
-
+                
             break
-
+        
         return micro_params
     
     
-    # Combined generation of fraction volumes and micro parameters to allow their joint posterior distribution 
-    def _random_model_parameters(self, p_iso, p_fib, f_in, D_iso, D_a, D_e, D_r, peaks_per_voxel, 
-                                 equal_fibers, assert_faster_D_a, tortuosity_approximation):
-        
-        fraction_volumes = self._random_fraction_volumes(p_iso, p_fib, peaks_per_voxel)
-        micro_params = self._random_micro_parameters(
-            f_in, D_iso, D_a, D_e, D_r, peaks_per_voxel, 
-            equal_fibers, assert_faster_D_a, tortuosity_approximation
-        )
-        
-        return fraction_volumes, micro_params
-
-
     def _compute_dwi(self, ratio, micro, peak_dirs_idx):
-
+   
         ratio[np.isnan(ratio)] = 0
         micro[np.isnan(micro)] = 0
-
+           
         # Convert the b-values from s/mm^2 to ms/um^2 
         bvals = np.vstack(1e-3 * self.gtab.bvals)
-
+           
         # First, compute the diffusion signal of free water
         dwi = ratio[0] * np.exp(-bvals * micro[self.MICRO_DE,0])
-
+           
         # Then, add the diffusion signal of fibers
         for j in range(len(peak_dirs_idx)):
-
+               
             # Squared dot product of the b-vectors and the j-th peak directions
             dir_prod_sqr = np.dot(self.gtab.bvecs, self.tessellation.vertices[peak_dirs_idx[j]].T) ** 2
-
+               
             dwi_intra = np.exp(-bvals * micro[self.MICRO_DA,j+1] * dir_prod_sqr)
             dwi_extra = np.exp(-bvals * (micro[self.MICRO_DE,j+1] * dir_prod_sqr + micro[self.MICRO_DR,j+1] * (1 - dir_prod_sqr)))
-
+               
             dwi += ratio[j+1] * (micro[self.MICRO_FIN,j+1] * dwi_intra + (1 - micro[self.MICRO_FIN,j+1]) * dwi_extra)
-
+           
         return 1e3 * dwi.T
 
 
@@ -405,11 +392,14 @@ class OdffpDictionary(DiffusionDataGenerator):
                     self.tessellation.theta[peak_dirs_idx[:self.peaks_per_voxel[j],i]] - np.pi/2
                 ])
 
-                # Draw model parameters randomly
-                self.ratio[:self.peaks_per_voxel[j]+1,j], self.micro[:,:self.peaks_per_voxel[j]+1,j] = self._random_model_parameters(
-                    p_iso, p_fib, f_in, D_iso, D_a, D_e, D_r, self.peaks_per_voxel[j], 
+                # Draw fraction volumes randomly
+                self.ratio[:self.peaks_per_voxel[j]+1,j] = self._random_fraction_volumes(p_iso, p_fib, self.peaks_per_voxel[j])
+              
+                # Draw microstructure parameters randomly
+                self.micro[:,:self.peaks_per_voxel[j]+1,j] = self._random_micro_parameters(
+                    f_in, D_iso, D_a, D_e, D_r, self.peaks_per_voxel[j], 
                     equal_fibers, assert_faster_D_a, tortuosity_approximation
-                ) 
+                )
 
             self.odf[:,chunk_idx] = self._compute_odf_trace(
                 odf_recon_model, self.ratio[:,chunk_idx], self.micro[:,:,chunk_idx], peak_dirs_idx
@@ -443,162 +433,120 @@ class OdffpDictionary(DiffusionDataGenerator):
 
 
 class PosteriorOdffpDictionary(OdffpDictionary):
-
-    # def __init__(self, gtab, odffp_fit, tessellation=dsiSphere8Fold()):
-    #     self._ratio_pdf = {0: {}} 
-    #     self._micro_pdf = {0: {}}
-    #
-    #     for peaks_num in range(1, odffp_fit.get_max_peaks_num()+1):
-    #
-    #         compartment_volumes = odffp_fit.get_compartment_volume(peaks_num)
-    #         try:
-    #             # # Fit KDE model of the compartment volumes
-    #             # self._ratio_pdf[peaks_num] = scipy.stats.gaussian_kde(compartment_volumes)
-    #
-    #             # Fit KDE model of the compartment volumes
-    #             self._ratio_pdf[peaks_num] = scipy.stats.gaussian_kde(compartment_volumes[1:])
-    #
-    #         except:
-    #             # If not succeeded, take mean values
-    #             self._ratio_pdf[peaks_num] = np.mean(compartment_volumes, axis=1)
-    #
-    #         self._micro_pdf[peaks_num] = {}
-    #         for peak_id in range(peaks_num+1):
-    #
-    #             # Diffusivity parameters of the free water compartment aren't estimated
-    #             if peak_id < 1:
-    #                 self._micro_pdf[peaks_num][peak_id] = {}
-    #                 continue
-    #
-    #             micro_parameters = odffp_fit.get_micro_parameters(peaks_num, peak_id)
-    #             try:
-    #                 # Fit KDE model of the microstructure parameters
-    #                 self._micro_pdf[peaks_num][peak_id] = scipy.stats.gaussian_kde(
-    #                     micro_parameters, bw_method='silverman'
-    #                 )
-    #             except:
-    #                 # If not succeeded, take mean values
-    #                 self._micro_pdf[peaks_num][peak_id] = np.mean(micro_parameters, axis=1)
-    #
-    #     OdffpDictionary.__init__(self, gtab, tessellation=tessellation)
-
-
+    
     def __init__(self, gtab, odffp_fit, tessellation=dsiSphere8Fold()):
-        self.max_peaks_num = odffp_fit.get_max_peaks_num()
+        self._ratio_pdf = {0: {}} 
+        self._micro_pdf = {0: {}}
 
-        # Free water fraction is not modeled, hence [1:]
-        compartment_volumes = odffp_fit.get_compartment_volume()[1:]
+        for peaks_num in range(1, odffp_fit.get_max_peaks_num()+1):
 
-        # For simplicity, assume equal_fibers, i.e., all fibers are like the first one (peak_id = 1)
-        micro_parameters = odffp_fit.get_micro_parameters(peak_id = 1)
+            compartment_volumes = odffp_fit.get_compartment_volume(peaks_num)
+            try:
+                # # Fit KDE model of the compartment volumes
+                # self._ratio_pdf[peaks_num] = scipy.stats.gaussian_kde(compartment_volumes)
 
-        try:
-            model_parameters = np.vstack((compartment_volumes, micro_parameters))
-            model_parameters[np.isnan(model_parameters)] = 0
-
-            self._model_pdf = scipy.stats.gaussian_kde(model_parameters)
+                # Fit KDE model of the compartment volumes
+                self._ratio_pdf[peaks_num] = scipy.stats.gaussian_kde(compartment_volumes[1:])
             
-        except:
-            self._model_pdf = np.hstack((
-                np.nanmean(compartment_volumes, axis=1),
-                np.nanmean(micro_parameters, axis=1)
-            ))
+            except:
+                # If not succeeded, take mean values
+                self._ratio_pdf[peaks_num] = np.mean(compartment_volumes, axis=1)
 
+            self._micro_pdf[peaks_num] = {}
+            for peak_id in range(peaks_num+1):
+    
+                # Diffusivity parameters of the free water compartment aren't estimated
+                if peak_id < 1:
+                    self._micro_pdf[peaks_num][peak_id] = {}
+                    continue
+
+                micro_parameters = odffp_fit.get_micro_parameters(peaks_num, peak_id)
+                try:    
+                    # Fit KDE model of the microstructure parameters
+                    self._micro_pdf[peaks_num][peak_id] = scipy.stats.gaussian_kde(
+                        micro_parameters, bw_method='silverman'
+                    )
+                except:
+                    # If not succeeded, take mean values
+                    self._micro_pdf[peaks_num][peak_id] = np.mean(micro_parameters, axis=1)
+                        
         OdffpDictionary.__init__(self, gtab, tessellation=tessellation)
-
+    
 
     def _crop_value(self, value, lower_bound, upper_bound):
         return np.maximum(np.minimum(np.squeeze(value), upper_bound), lower_bound)
 
 
-    def _random_fraction_volumes(self, p_iso, p_fib, peaks_per_voxel, params_sample):
-        
-        fiber_fraction_volumes = params_sample[:peaks_per_voxel]
-        water_fraction_volume = np.maximum(p_iso[0], 1 - np.sum(fiber_fraction_volumes))
-        
-        fraction_volumes = np.hstack((
-            water_fraction_volume, fiber_fraction_volumes
-        ))
+    def _random_fraction_volumes(self, p_iso, p_fib, peaks_per_voxel):        
+        try:
+            fiber_fraction_volumes = np.squeeze(self._ratio_pdf[peaks_per_voxel].resample(1))
+            water_fraction_volume = np.maximum(p_iso[0], 1 - np.sum(fiber_fraction_volumes))
+            fraction_volumes = np.hstack((water_fraction_volume, fiber_fraction_volumes))
+        except:
+            fraction_volumes = np.squeeze(self._ratio_pdf[peaks_per_voxel])
 
         fraction_volumes[0] = self._crop_value(fraction_volumes[0], p_iso[0], p_iso[1])
-
+    
         for peak_id in range(1,peaks_per_voxel+1):
             fraction_volumes[peak_id] = self._crop_value(fraction_volumes[peak_id], p_fib[0], p_fib[1])
-
+        
         return fraction_volumes / np.maximum(1e-8, np.sum(fraction_volumes))
-
-
-    def _random_micro_parameters(self, f_in, D_iso, D_a, D_e, D_r, peaks_per_voxel, 
-                                 equal_fibers, assert_faster_D_a, tortuosity_approximation,
-                                 params_sample):
-
-        micro_params = np.zeros((self.MICRO_PARAMS_NUM, peaks_per_voxel+1))
-
-        # Free water compartment has D_a=0, f_in=0, and D_a=D_e
-        micro_params[1:3,0] = np.random.uniform(D_iso[0], D_iso[1])
-
-        if peaks_per_voxel < 1:
-            return True, micro_params
-
-        # Equal fibers assumption for simplicity
-        for peak_id in range(1,peaks_per_voxel+1):
-            micro_params[:,peak_id] = params_sample[self.max_peaks_num:]
-
-        if self._out_of_range(micro_params[self.MICRO_DA,1:peaks_per_voxel+1], D_a):
-            return False, micro_params
-
-        if self._out_of_range(micro_params[self.MICRO_DE,1:peaks_per_voxel+1], D_e):
-            return False, micro_params
-
-        if self._out_of_range(micro_params[self.MICRO_DR,1:peaks_per_voxel+1], D_r):
-            return False, micro_params
-
-        if self._out_of_range(micro_params[self.MICRO_FIN,1:peaks_per_voxel+1], f_in):
-            return False, micro_params
-
-        if assert_faster_D_a and np.any(micro_params[self.MICRO_DA,1:] < micro_params[self.MICRO_DE,1:]):
-            return False, micro_params
-
-        if tortuosity_approximation:
-            micro_params[self.MICRO_DR,1:] = (1 - micro_params[self.MICRO_FIN,1:]) * micro_params[self.MICRO_DA,1:]
-            if np.any(micro_params[self.MICRO_DR,1:] < D_r[0]) or np.any(micro_params[self.MICRO_DR,1:] > D_r[1]):
-                return False, micro_params
-
-        return True, micro_params
-
-
-    def _random_model_parameters(self, p_iso, p_fib, f_in, D_iso, D_a, D_e, D_r, peaks_per_voxel, 
-        equal_fibers, assert_faster_D_a, tortuosity_approximation):
-
-        while True:
-            
-            try:
-                params_sample = np.squeeze(self._model_pdf.resample(1))
-                
-            except:
-                params_sample = self._model_pdf
-
-            # Decode fraction volumes                
-            fraction_volumes = self._random_fraction_volumes(
-                p_iso, p_fib, peaks_per_voxel, params_sample
-            )
-
-            # Decode microstructure parameters            
-            sample_is_valid, micro_params = self._random_micro_parameters(
-                f_in, D_iso, D_a, D_e, D_r, peaks_per_voxel, 
-                True, assert_faster_D_a, tortuosity_approximation, params_sample
-            )    
-            
-            if sample_is_valid:
-                break
-                
-        return fraction_volumes, micro_params
 
 
     def _out_of_range(self, values, valid_range):
         return np.any(values < valid_range[0]) or np.any(values > valid_range[1])
+        
 
+    def _random_micro_parameters(self, f_in, D_iso, D_a, D_e, D_r, peaks_per_voxel, 
+                                 equal_fibers, assert_faster_D_a, tortuosity_approximation):
+    
+        micro_params = np.zeros((self.MICRO_PARAMS_NUM, peaks_per_voxel+1))
+    
+        # Free water compartment has D_a=0, f_in=0, and D_a=D_e
+        micro_params[1:3,0] = np.random.uniform(D_iso[0], D_iso[1])
+    
+        # Repeat until the microstructure parameters are valid
+        while True:
 
+            for peak_id in range(1,peaks_per_voxel+1):
+
+                if equal_fibers and peak_id > 1:
+                    # Equal fibers means that all fibers have the same diffusivities and f_in
+                    micro_params[:,peak_id] = micro_params[:,1]
+                    continue
+                
+                try:
+                    micro_params[:,peak_id] = np.squeeze(
+                        self._micro_pdf[peaks_per_voxel][peak_id].resample(1)
+                    )
+                except:
+                    micro_params[:,peak_id] = np.squeeze(
+                        self._micro_pdf[peaks_per_voxel][peak_id]
+                    )
+                
+            if self._out_of_range(micro_params[self.MICRO_DA,1:peaks_per_voxel+1], D_a):
+                continue
+            
+            if self._out_of_range(micro_params[self.MICRO_DE,1:peaks_per_voxel+1], D_e):
+                continue
+            
+            if self._out_of_range(micro_params[self.MICRO_DR,1:peaks_per_voxel+1], D_r):
+                continue
+            
+            if self._out_of_range(micro_params[self.MICRO_FIN,1:peaks_per_voxel+1], f_in):
+                continue
+            
+            if assert_faster_D_a and np.any(micro_params[self.MICRO_DA,1:] < micro_params[self.MICRO_DE,1:]):
+                continue
+    
+            if tortuosity_approximation:
+                micro_params[self.MICRO_DR,1:] = (1 - micro_params[self.MICRO_FIN,1:]) * micro_params[self.MICRO_DA,1:]
+                if np.any(micro_params[self.MICRO_DR,1:] < D_r[0]) or np.any(micro_params[self.MICRO_DR,1:] > D_r[1]):
+                    continue
+    
+            break
+    
+        return micro_params
 
 
 class PosteriorOdffpDictionaryFromFib(PosteriorOdffpDictionary):
@@ -845,50 +793,125 @@ class OdffpModel(object):
     #     ]
 
 
-    def _find_matching_odf_trace(self, input_odf_trace, dict_odf_trace, penalty, n_components=10):
-        try:
-            # Utilizes the TruncatedSVD function for dimension reduction
-            svd = TruncatedSVD(n_components=n_components)
-            reduced_dict_odf_trace = svd.fit_transform(dict_odf_trace.T).T
-            reduced_input_odf_trace = svd.transform(input_odf_trace)
+    def _find_matching_odf_trace(self, input_odf_trace, dict_odf_trace, penalty):
+    
+        input_odf_trace_num = input_odf_trace.shape[0]
 
-            # Stores max_peaks_num as another variable for later
-            input_odf_trace_num = reduced_input_odf_trace.shape[0]
-            max_peaks_num = self._dict.max_peaks_num
+        max_dot_product_values = np.zeros((self._dict.max_peaks_num+1, input_odf_trace_num))
+        max_dot_product_dict_idx = np.zeros((self._dict.max_peaks_num+1, input_odf_trace_num), dtype=int)
 
-            max_dot_product_values = np.zeros((self._dict.max_peaks_num + 1, input_odf_trace_num))
-            max_dot_product_dict_idx = np.zeros((self._dict.max_peaks_num + 1, input_odf_trace_num), dtype=int)
+        peak_filters = np.array([self._dict.peaks_per_voxel == peak_id for peak_id in range(self._dict.max_peaks_num + 1)])
+        peak_filters[~np.any(peak_filters, axis=1), self._dict.IDX_ISO] = True
+        peak_filters_indices = [np.where(peak_filter)[0] for peak_filter in peak_filters]
 
-            # Uses list comprehension to limit computations for peak_filters indices
-            peak_filters = np.array([self._dict.peaks_per_voxel == peak_id for peak_id in range(max_peaks_num + 1)])
-            peak_filters[~np.any(peak_filters, axis=1), self._dict.IDX_ISO] = True
-            peak_filters_indices = [np.where(peak_filters)[0] for peak_filter in peak_filters]
+        for peak_id in range(self._dict.max_peaks_num+1):
+            peak_filter_idx = peak_filters_indices[peak_id]
 
+            dot_product = np.dot(input_odf_trace, dict_odf_trace[:,peak_filters[peak_id]])
+            max_dot_product_idx = np.argmax(dot_product, axis=1)
+            max_dot_product_dict_idx[peak_id] = peak_filter_idx[max_dot_product_idx] 
+            max_dot_product_values[peak_id] = dot_product[
+                np.arange(input_odf_trace_num),
+                max_dot_product_idx
+            ]
 
-            for peak_id in range(self._dict.max_peaks_num + 1):
-                peak_filter_idx = peak_filters_indices[peak_id]
-
-                dot_product = np.dot(reduced_input_odf_trace, reduced_dict_odf_trace[:, peak_filter_idx])
-                max_dot_product_idx = np.argmax(dot_product, axis=1)
-                max_dot_product_dict_idx[peak_id] = peak_filter_idx[max_dot_product_idx]
-                max_dot_product_values[peak_id] = dot_product[
-                    np.arange(input_odf_trace_num),
-                    max_dot_product_idx
-                ]
-
-            # Penalization begins at the 2nd fiber
-            if penalty > 0.0:
-                max_dot_product_values = np.log(max_dot_product_values) - 2 * penalty * np.atleast_2d(
-                    np.hstack((0, np.arange(self._dict.max_peaks_num)))
-                ).T
-
-        except:
-            return self._find_matching_odf_trace(input_odf_trace, dict_odf_trace, penalty)
-
+        # Penalization begins at the 2nd fiber
+        if penalty > 0.0:
+            max_dot_product_values = np.log(max_dot_product_values) - 2 * penalty * np.atleast_2d(
+                np.hstack((0, np.arange(self._dict.max_peaks_num)))
+            ).T
+    
         return max_dot_product_dict_idx[
             np.argmax(max_dot_product_values, axis=0),
             np.arange(input_odf_trace_num)
         ]
+
+
+
+
+    # def _find_matching_odf_trace(self, input_odf_trace, dict_odf_trace, penalty):
+    #
+    #     try:
+    #         input_odf_trace_num = input_odf_trace.shape[0]
+    #
+    #         max_dot_product_values = np.zeros((self._dict.max_peaks_num+1, input_odf_trace_num))
+    #         max_dot_product_dict_idx = np.zeros((self._dict.max_peaks_num+1, input_odf_trace_num), dtype=int)
+    #
+    #         # Uses list comprehension to limit computations for peak_filters indices
+    #         peak_filters = np.array([self._dict.peaks_per_voxel == peak_id for peak_id in range(self._dict.max_peaks_num + 1)])
+    #         peak_filters[~np.any(peak_filters, axis=1), self._dict.IDX_ISO] = True
+    #         peak_filters_indices = [np.where(peak_filter)[0] for peak_filter in peak_filters]
+    #
+    #         for peak_id in range(self._dict.max_peaks_num+1):
+    #             peak_filter_idx = peak_filters_indices[peak_id]
+    #
+    #             dot_product = np.dot(input_odf_trace, dict_odf_trace[:,peak_filter])
+    #             max_dot_product_idx = np.argmax(dot_product, axis=1)
+    #             max_dot_product_dict_idx[peak_id] = peak_filter_idx[max_dot_product_idx] 
+    #             max_dot_product_values[peak_id] = dot_product[
+    #                 np.arange(input_odf_trace_num),
+    #                 max_dot_product_idx
+    #             ]
+    #
+    #         # Penalization begins at the 2nd fiber
+    #         if penalty > 0.0:
+    #             max_dot_product_values = np.log(max_dot_product_values) - 2 * penalty * np.atleast_2d(
+    #                 np.hstack((0, np.arange(self._dict.max_peaks_num)))
+    #             ).T
+    #
+    #     except:
+    #         return self._find_matching_odf_trace(input_odf_trace, dict_odf_trace, penalty)
+    #
+    #     return max_dot_product_dict_idx[
+    #         np.argmax(max_dot_product_values, axis=0),
+    #         np.arange(input_odf_trace_num)
+    #     ]
+
+
+    # def _find_matching_odf_trace(self, input_odf_trace, dict_odf_trace, penalty, n_components=10):
+    #     try:
+    #         # Utilizes the TruncatedSVD function for dimension reduction
+    #         svd = TruncatedSVD(n_components=n_components)
+    #         reduced_dict_odf_trace = svd.fit_transform(dict_odf_trace.T).T
+    #         reduced_input_odf_trace = svd.transform(input_odf_trace)
+    #
+    #         # Stores max_peaks_num as another variable for later
+    #         input_odf_trace_num = reduced_input_odf_trace.shape[0]
+    #         max_peaks_num = self._dict.max_peaks_num
+    #
+    #         max_dot_product_values = np.zeros((self._dict.max_peaks_num + 1, input_odf_trace_num))
+    #         max_dot_product_dict_idx = np.zeros((self._dict.max_peaks_num + 1, input_odf_trace_num), dtype=int)
+    #
+    #         # Uses list comprehension to limit computations for peak_filters indices
+    #         peak_filters = np.array([self._dict.peaks_per_voxel == peak_id for peak_id in range(max_peaks_num + 1)])
+    #         peak_filters[~np.any(peak_filters, axis=1), self._dict.IDX_ISO] = True
+    #         peak_filters_indices = [np.where(peak_filters)[0] for peak_filter in peak_filters]
+    #
+    #
+    #         for peak_id in range(self._dict.max_peaks_num + 1):
+    #             peak_filter_idx = peak_filters_indices[peak_id]
+    #
+    #             dot_product = np.dot(reduced_input_odf_trace, reduced_dict_odf_trace[:, peak_filter_idx])
+    #             max_dot_product_idx = np.argmax(dot_product, axis=1)
+    #             max_dot_product_dict_idx[peak_id] = peak_filter_idx[max_dot_product_idx]
+    #             max_dot_product_values[peak_id] = dot_product[
+    #                 np.arange(input_odf_trace_num),
+    #                 max_dot_product_idx
+    #             ]
+    #
+    #         # Penalization begins at the 2nd fiber
+    #         if penalty > 0.0:
+    #             max_dot_product_values = np.log(max_dot_product_values) - 2 * penalty * np.atleast_2d(
+    #                 np.hstack((0, np.arange(self._dict.max_peaks_num)))
+    #             ).T
+    #
+    #     except:
+    #         return self._find_matching_odf_trace(input_odf_trace, dict_odf_trace, penalty)
+    #
+    #     return max_dot_product_dict_idx[
+    #         np.argmax(max_dot_product_values, axis=0),
+    #         np.arange(input_odf_trace_num)
+    #     ]
 
 
     def fit(self, data, mask=None, max_chunk_size=1000, penalty = DEFAULT_FIT_PENALTY):
