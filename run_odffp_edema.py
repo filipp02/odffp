@@ -22,6 +22,10 @@ bval_file = "dwi.bval"
 healthy_mask_file = "roi_brain_minus_edema.nii.gz"
 edema_mask_file = "roi_edema.nii.gz"
 
+output_dir = "output"
+if not os.path.isdir(output_dir):
+    os.mkdir(output_dir)
+   
 
 # ODF-dictionary
 
@@ -62,10 +66,6 @@ for run in range(runs_num):
         np.round(100000*fit_penalty)
     )
      
-    output_dir = "output"
-    if not os.path.isdir(output_dir):
-        os.mkdir(output_dir)
-    
     output_file = "%s/dwi_edge-r%03d-d%03d_run%03d.fib.gz" % (output_dir, np.round(100*odf_recon_edge), np.round(100*odf_dict_edge), run)
     
     data, affine, voxel_size = load_nifti(dwi_file, return_voxsize=True)
