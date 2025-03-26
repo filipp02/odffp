@@ -32,8 +32,11 @@ from sklearn.decomposition import TruncatedSVD
 DEFAULT_RECON_EDGE = 1.2
 DEFAULT_DICT_EDGE = 1.2
 
-DEFAULT_FIT_PENALTY = 0.00001
-MAX_FIT_PENALTY = 0.1
+DEFAULT_FIT_PENALTY = 1e-5 # i.e., 0.00001
+MAX_FIT_PENALTY = 1e-1 # i.e., 0.1
+
+DEFAULT_PEAK_BOOST = 0
+MAX_PEAK_BOOST = 1.0 #1e-1 # i.e., 0.1
 
 
 def plot_odf(odf, filename='odf.png', tessellation=dsiSphere8Fold()):
@@ -793,7 +796,40 @@ class OdffpModel(object):
     #     ]
 
 
-    def _find_matching_odf_trace(self, input_odf_trace, dict_odf_trace, penalty):
+    # def _find_matching_odf_trace(self, input_odf_trace, dict_odf_trace, penalty):
+    #
+    #     input_odf_trace_num = input_odf_trace.shape[0]
+    #
+    #     max_dot_product_values = np.zeros((self._dict.max_peaks_num+1, input_odf_trace_num))
+    #     max_dot_product_dict_idx = np.zeros((self._dict.max_peaks_num+1, input_odf_trace_num), dtype=int)
+    #
+    #     peak_filters = np.array([self._dict.peaks_per_voxel == peak_id for peak_id in range(self._dict.max_peaks_num + 1)])
+    #     peak_filters[~np.any(peak_filters, axis=1), self._dict.IDX_ISO] = True
+    #     peak_filters_indices = [np.where(peak_filter)[0] for peak_filter in peak_filters]
+    #
+    #     for peak_id in range(self._dict.max_peaks_num+1):
+    #         peak_filter_idx = peak_filters_indices[peak_id]
+    #
+    #         dot_product = np.dot(input_odf_trace, dict_odf_trace[:,peak_filters[peak_id]])
+    #         max_dot_product_idx = np.argmax(dot_product, axis=1)
+    #         max_dot_product_dict_idx[peak_id] = peak_filter_idx[max_dot_product_idx] 
+    #         max_dot_product_values[peak_id] = dot_product[
+    #             np.arange(input_odf_trace_num),
+    #             max_dot_product_idx
+    #         ]
+    #
+    #     # Penalization begins at the 2nd fiber
+    #     if penalty > 0.0:
+    #         max_dot_product_values = np.log(max_dot_product_values) - 2 * penalty * np.atleast_2d(
+    #             np.hstack((0, np.arange(self._dict.max_peaks_num)))
+    #         ).T
+    #
+    #     return max_dot_product_dict_idx[
+    #         np.argmax(max_dot_product_values, axis=0),
+    #         np.arange(input_odf_trace_num)
+    #     ]
+
+    def _find_matching_odf_trace(self, input_odf_trace, dict_odf_trace, penalty, peak_boost):
     
         input_odf_trace_num = input_odf_trace.shape[0]
 
@@ -808,6 +844,11 @@ class OdffpModel(object):
             peak_filter_idx = peak_filters_indices[peak_id]
 
             dot_product = np.dot(input_odf_trace, dict_odf_trace[:,peak_filters[peak_id]])
+            
+            if peak_boost > 0.0:
+#                dot_product += peak_boost * dict_odf_trace[0,peak_filters[peak_id]] # * self._dict.ratio[0,peak_filters[peak_id]]
+                dot_product -= peak_boost * np.min(dict_odf_trace[:,peak_filters[peak_id]],axis=0)
+            
             max_dot_product_idx = np.argmax(dot_product, axis=1)
             max_dot_product_dict_idx[peak_id] = peak_filter_idx[max_dot_product_idx] 
             max_dot_product_values[peak_id] = dot_product[
@@ -817,7 +858,7 @@ class OdffpModel(object):
 
         # Penalization begins at the 2nd fiber
         if penalty > 0.0:
-            max_dot_product_values = np.log(max_dot_product_values) - 2 * penalty * np.atleast_2d(
+            max_dot_product_values = max_dot_product_values - 2 * penalty * np.atleast_2d(
                 np.hstack((0, np.arange(self._dict.max_peaks_num)))
             ).T
     
@@ -825,7 +866,6 @@ class OdffpModel(object):
             np.argmax(max_dot_product_values, axis=0),
             np.arange(input_odf_trace_num)
         ]
-
 
 
 
@@ -914,9 +954,12 @@ class OdffpModel(object):
     #     ]
 
 
-    def fit(self, data, mask=None, max_chunk_size=1000, penalty = DEFAULT_FIT_PENALTY):
+    def fit(self, data, mask=None, max_chunk_size=1000, 
+            penalty = DEFAULT_FIT_PENALTY, peak_boost = DEFAULT_PEAK_BOOST):
+        
         max_chunk_size = np.maximum(1, max_chunk_size)
         penalty = np.maximum(0.0, np.minimum(MAX_FIT_PENALTY, penalty))
+        peak_boost = np.maximum(0.0, np.minimum(MAX_PEAK_BOOST, peak_boost))
 
         tessellation_size = len(self._dict.tessellation.vertices)
         tessellation_half_size = tessellation_size // 2
@@ -957,7 +1000,9 @@ class OdffpModel(object):
                     self.resample_odf(input_odf[i], self._dict.tessellation, rotated_tessellation[i])
                 )
 
-            dict_idx[chunk_idx] = self._find_matching_odf_trace(input_odf_trace, dict_odf_trace, penalty) 
+            dict_idx[chunk_idx] = self._find_matching_odf_trace(
+                input_odf_trace, dict_odf_trace, penalty, peak_boost
+            ) 
 
             for i, j in zip(range(chunk_size), chunk_idx):
                 if self._output_dict_odf:
@@ -1198,4 +1243,3 @@ class OdffpFit(OdfFit):
                 fib_gz_file.writelines(fib_file)
 
         os.remove("%s.fib" % output_file_prefix)
-
