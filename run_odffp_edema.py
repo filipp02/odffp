@@ -77,7 +77,7 @@ for run in range(runs_num):
     gtab = gradient_table(bvals, bvecs)
     
     healthy_mask, _ = load_nifti(healthy_mask_file)
-    edema_mask, _ = load_nifti(edema_mask_file)
+    edema_mask, _ = load_nifti(edema_mask_file) # If there is no edema: edema_mask = None 
         
     print(datetime.now().strftime("%H:%M:%S"), "Loading ODF-dictionary...")
      
@@ -102,9 +102,10 @@ for run in range(runs_num):
     )
 
     odffp_healthy_fit = odffp.fit(data, healthy_mask, penalty=fit_penalty, peak_boost=healthy_peak_boost, max_chunk_size=max_chunk_size)
-    odffp_edema_fit = odffp.fit(data, edema_mask, penalty=fit_penalty, peak_boost=edema_peak_boost, max_chunk_size=max_chunk_size)
-    
-    odffp_healthy_fit.merge(odffp_edema_fit)
+
+    if edema_mask is not None:
+        odffp_edema_fit = odffp.fit(data, edema_mask, penalty=fit_penalty, peak_boost=edema_peak_boost, max_chunk_size=max_chunk_size)
+        odffp_healthy_fit.merge(odffp_edema_fit)
     
     print(datetime.now().strftime("%H:%M:%S"), "Exporting to FIB...")
     odffp_healthy_fit.save_as_fib(affine, voxel_size, output_file)    
