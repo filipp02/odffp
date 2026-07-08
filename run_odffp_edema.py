@@ -51,10 +51,11 @@ max_chunk_size = 1000 # Bigger chunks work faster, but use more RAM
 
 runs_num = 1
 fit_penalty = 1e-5  
-healthy_peak_boost = 0.00
-edema_peak_boost = 0.15
+healthy_peak_boost = 0.00 # Can be higher (e.g., 0.10)
+edema_peak_boost = 0.15 # Can be higher (e.g., 0.30)
 
-np.random.seed(0)
+# Uncomment if you want the same ODF-dictionary at each run
+# np.random.seed(0)
 
 
 for run in range(runs_num):
